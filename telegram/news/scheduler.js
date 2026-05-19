@@ -6,6 +6,8 @@
 import cron    from 'node-cron';
 import * as cheerio from 'cheerio';
 import Anthropic    from '@anthropic-ai/sdk';
+import { config }   from '../config.js';
+import { fetchAllIndices, formatIndicesMessage } from './market_indices.js';
 
 let scheduledTask = null;
 
@@ -149,6 +151,32 @@ export async function sendMorningDigest(sendToAll) {
     }
 
     await new Promise(r => setTimeout(r, 2000));
+  }
+
+  // VNIndex tự động
+  if (config.morning.vnindex) {
+    try {
+      console.log('[News] 📊 Đang lấy chỉ số VNIndex...');
+      const indices = await fetchAllIndices();
+      sendToAll(formatIndicesMessage(indices));
+    } catch (err) {
+      console.error('[News] ❌ VNIndex:', err.message);
+      sendToAll(`⚠️ *VNIndex:* Lỗi — ${err.message}`);
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  // Deep news tự động theo watchlist
+  if (config.morning.deepNews && process.env.ANTHROPIC_API_KEY) {
+    const watchlist = config.scanner.watchlist;
+    if (watchlist.length > 0) {
+      console.log('[News] 🔬 Đang lấy tin chuyên sâu...');
+      sendToAll(`🔬 *Tin chuyên sâu ${watchlist.length} mã...*`);
+      for (const sym of watchlist) {
+        await sendDeepNews(sym, sendToAll);
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
   }
 
   sendToAll(`✅ *Xong bản tin sáng!*\n📊 /scan — Tín hiệu kỹ thuật\n📰 /news — Xem lại bất cứ lúc nào`);

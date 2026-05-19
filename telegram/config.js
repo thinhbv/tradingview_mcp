@@ -35,6 +35,13 @@ export const config = {
     ],
   },
 
+  morning: {
+    // Bản tin sáng tự động (9:00 T2-T6) — đọc từ .env, có thể thay đổi runtime
+    get basicNews() { return process.env.MORNING_BASIC_NEWS !== 'false'; },
+    get deepNews()  { return process.env.MORNING_DEEP_NEWS  === 'true';  },
+    get vnindex()   { return process.env.MORNING_VNINDEX    === 'true';  },
+  },
+
   signals: {
     // Giá trong vùng <= X% trên đáy 60 phiên → tín hiệu MUA
     oversoldPct: 0.20,

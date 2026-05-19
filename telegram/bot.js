@@ -28,6 +28,7 @@
 
 import TelegramBot from 'node-telegram-bot-api';
 import { config }  from './config.js';
+import { fetchAllIndices, formatIndicesMessage } from './news/market_indices.js';
 import { scanAll, isMarketOpen } from './scanner.js';
 import { formatSignalMessage, formatScanSummary } from './formatter.js';
 import {
@@ -36,6 +37,7 @@ import {
 } from './subscribers.js';
 import { sendMorningDigest, sendDeepNews } from './news/scheduler.js';
 import { fetchAllIndices, formatIndicesMessage } from './news/market_indices.js';
+import { setEnvValue } from './env_writer.js';
 
 let bot        = null;
 let watchlist  = [...config.scanner.watchlist];
@@ -134,6 +136,7 @@ export function createBot() {
       { command: 'status',    description: '⚙️ Trạng thái bot' },
       { command: 'members',   description: '👥 [Admin] Xem danh sách subscriber' },
       { command: 'broadcast', description: '📢 [Admin] Gửi thông báo đến tất cả' },
+      { command: 'morning',   description: '⚙️ [Admin] Bật/tắt bản tin sáng tự động' },
       { command: 'help',      description: '📖 Hướng dẫn' },
     ], { scope: { type: 'chat', chat_id: ADMIN_ID } }).catch(() => {});
   }
@@ -470,6 +473,59 @@ ${groupExtra}
     }
 
     bot.sendMessage(ADMIN_ID, msg2, { parse_mode: 'Markdown' });
+  });
+
+  // ── /morning [on|off] [news|deepnews|vnindex] (admin) ────────────────────
+  bot.onText(/\/morning(?:@\S+)?(?:\s+(.+))?/, (msg, match) => {
+    if (msg.chat.id !== ADMIN_ID) {
+      bot.sendMessage(msg.chat.id, `🚫 Lệnh này chỉ dành cho admin.`);
+      return;
+    }
+
+    const arg = match[1]?.trim().toLowerCase();
+
+    // Không có arg → hiển thị trạng thái hiện tại
+    if (!arg) {
+      const s = config.morning;
+      bot.sendMessage(ADMIN_ID,
+        `⚙️ *Bản tin sáng tự động (9:00 T2-T6)*\n\n` +
+        `📰 Tin cơ bản: ${s.basicNews ? '✅ BẬT' : '❌ TẮT'}\n` +
+        `🔬 Tin chuyên sâu: ${s.deepNews ? '✅ BẬT' : '❌ TẮT'}\n` +
+        `📊 VNIndex: ${s.vnindex ? '✅ BẬT' : '❌ TẮT'}\n\n` +
+        `_Lệnh:_\n` +
+        `/morning on news — bật tin cơ bản\n` +
+        `/morning off news — tắt tin cơ bản\n` +
+        `/morning on deepnews — bật tin chuyên sâu\n` +
+        `/morning off deepnews — tắt tin chuyên sâu\n` +
+        `/morning on vnindex — bật VNIndex\n` +
+        `/morning off vnindex — tắt VNIndex`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const parts  = arg.split(/\s+/);
+    const action = parts[0]; // on | off
+    const target = parts[1]; // news | deepnews | vnindex
+
+    if (!['on', 'off'].includes(action) || !['news', 'deepnews', 'vnindex'].includes(target)) {
+      bot.sendMessage(ADMIN_ID,
+        `⚠️ Cú pháp: /morning [on|off] [news|deepnews|vnindex]\nVD: /morning on deepnews`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const val    = action === 'on';
+    const envMap = { news: 'MORNING_BASIC_NEWS', deepnews: 'MORNING_DEEP_NEWS', vnindex: 'MORNING_VNINDEX' };
+    setEnvValue(envMap[target], val);
+
+    const label = { news: '📰 Tin cơ bản', deepnews: '🔬 Tin chuyên sâu', vnindex: '📊 VNIndex' };
+    bot.sendMessage(ADMIN_ID,
+      `${val ? '✅' : '❌'} *${label[target]}* đã ${val ? 'BẬT' : 'TẮT'} trong bản tin sáng.\n_Đã lưu vào .env — giữ nguyên sau khi restart._\n\n` +
+      `/morning — xem trạng thái`,
+      { parse_mode: 'Markdown' }
+    );
   });
 
   // ── /broadcast <message> (admin) ──────────────────────────────────────────
