@@ -48,7 +48,7 @@ const bot = createBot();
 // Startup notification đã tắt
 
 // Khởi động news scheduler — bản tin sáng 9:00 T2-T6
-startNewsScheduler(sendAlert, '0 9 * * 1-5');
+startNewsScheduler(sendAlert, '0 9 * * 1-5', getWatchlist);
 
 // Khởi động auto-scanner (tự động quét và gửi tín hiệu)
 startAutoScanner(

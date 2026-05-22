@@ -29,14 +29,13 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { config }  from './config.js';
 import { fetchAllIndices, formatIndicesMessage } from './news/market_indices.js';
-import { scanAll, isMarketOpen } from './scanner.js';
+import { scanAll, isMarketOpen, getScanState, setScanEnabled, setScanInterval } from './scanner.js';
 import { formatSignalMessage, formatScanSummary } from './formatter.js';
 import {
   loadSubscribers, addSubscriber, removeSubscriber,
   getAllSubscribers, getCount,
 } from './subscribers.js';
 import { sendMorningDigest, sendDeepNews } from './news/scheduler.js';
-import { fetchAllIndices, formatIndicesMessage } from './news/market_indices.js';
 import { setEnvValue } from './env_writer.js';
 
 let bot        = null;
@@ -137,6 +136,7 @@ export function createBot() {
       { command: 'members',   description: '👥 [Admin] Xem danh sách subscriber' },
       { command: 'broadcast', description: '📢 [Admin] Gửi thông báo đến tất cả' },
       { command: 'morning',   description: '⚙️ [Admin] Bật/tắt bản tin sáng tự động' },
+      { command: 'autoscan',  description: '🔄 [Admin] Bật/tắt/đặt lịch auto-scan' },
       { command: 'help',      description: '📖 Hướng dẫn' },
     ], { scope: { type: 'chat', chat_id: ADMIN_ID } }).catch(() => {});
   }
@@ -282,8 +282,9 @@ Dùng /scan để quét ngay, /help để xem hướng dẫn.
   bot.onText(/\/news(@\S+)?$/, async (msg) => {
     const chatId = msg.chat.id;
     await bot.sendMessage(chatId, `📰 Đang tổng hợp tin tức... ⏳\n_Vui lòng chờ 15-20 giây_`, { parse_mode: 'Markdown' });
-    await sendMorningDigest((message) =>
-      bot.sendMessage(chatId, message, { parse_mode: 'Markdown' }).catch(() => {})
+    await sendMorningDigest(
+      (message) => bot.sendMessage(chatId, message, { parse_mode: 'Markdown' }).catch(() => {}),
+      watchlist
     );
   });
 
@@ -374,6 +375,7 @@ Dùng /scan để quét ngay, /help để xem hướng dẫn.
     const subs      = getAllSubscribers();
     const groups    = subs.filter(s => s.type === 'group').length;
     const privates  = subs.filter(s => s.type !== 'group').length;
+    const scan      = getScanState();
 
     bot.sendMessage(msg.chat.id, `
 ⚙️ *Trạng thái Bot*
@@ -384,7 +386,7 @@ Dùng /scan để quét ngay, /help để xem hướng dẫn.
 📊 Watchlist: ${watchlist.length} mã
 🕐 Thị trường: ${marketStr}
 ⏰ Thời gian: ${now}
-🔄 Scan: mỗi ${config.scanner.intervalMs / 60000} phút
+🔄 Auto-scan: ${scan.enabled ? `✅ BẬT` : `❌ TẮT`} — mỗi *${scan.intervalMs / 60000} phút*
     `.trim(), { parse_mode: 'Markdown' });
   });
 
@@ -525,6 +527,62 @@ ${groupExtra}
       `${val ? '✅' : '❌'} *${label[target]}* đã ${val ? 'BẬT' : 'TẮT'} trong bản tin sáng.\n_Đã lưu vào .env — giữ nguyên sau khi restart._\n\n` +
       `/morning — xem trạng thái`,
       { parse_mode: 'Markdown' }
+    );
+  });
+
+  // ── /autoscan [on|off|interval <phút>] (admin) ───────────────────────────
+  bot.onText(/\/autoscan(?:@\S+)?(?:\s+(.+))?/, (msg, match) => {
+    if (msg.chat.id !== ADMIN_ID) {
+      bot.sendMessage(msg.chat.id, `🚫 Lệnh này chỉ dành cho admin.`);
+      return;
+    }
+
+    const arg = match[1]?.trim().toLowerCase();
+    const scan = getScanState();
+
+    if (!arg) {
+      bot.sendMessage(ADMIN_ID,
+        `🔄 *Auto-scan hiện tại*\n\n` +
+        `Trạng thái: ${scan.enabled ? '✅ BẬT' : '❌ TẮT'}\n` +
+        `Chu kỳ: *${scan.intervalMs / 60000} phút*\n\n` +
+        `_Lệnh:_\n` +
+        `/autoscan on — bật auto-scan\n` +
+        `/autoscan off — tắt auto-scan\n` +
+        `/autoscan interval 15 — đặt chu kỳ 15 phút`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    if (arg === 'on') {
+      setScanEnabled(true);
+      bot.sendMessage(ADMIN_ID, `✅ *Auto-scan đã BẬT* — sẽ quét mỗi ${getScanState().intervalMs / 60000} phút trong giờ giao dịch.`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    if (arg === 'off') {
+      setScanEnabled(false);
+      bot.sendMessage(ADMIN_ID, `❌ *Auto-scan đã TẮT* — dùng /autoscan on để bật lại.`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    const parts = arg.split(/\s+/);
+    if (parts[0] === 'interval' && parts[1]) {
+      const minutes = parseFloat(parts[1]);
+      if (isNaN(minutes) || minutes < 1 || minutes > 1440) {
+        bot.sendMessage(ADMIN_ID, `⚠️ Chu kỳ phải từ 1 đến 1440 phút.\nVD: /autoscan interval 15`);
+        return;
+      }
+      setScanInterval(Math.round(minutes * 60000));
+      bot.sendMessage(ADMIN_ID,
+        `⏱️ *Chu kỳ scan đã đổi thành ${minutes} phút.*\n_Có hiệu lực từ lần scan tiếp theo._`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    bot.sendMessage(ADMIN_ID,
+      `⚠️ Cú pháp không hợp lệ.\n/autoscan on | off | interval <phút>\nVD: /autoscan interval 15`
     );
   });
 

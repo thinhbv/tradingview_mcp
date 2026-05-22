@@ -74,50 +74,55 @@ export async function scanAll(symbols = defaultWatchlist, onProgress = null) {
   return results;
 }
 
+// ─── Scan state (có thể thay đổi qua lệnh bot) ───────────────────────────────
+let scanEnabled   = true;
+let scanIntervalMs = config.scanner.intervalMs;
+
+export function setScanEnabled(val)  { scanEnabled    = !!val; }
+export function setScanInterval(ms)  { scanIntervalMs = ms; }
+export function getScanState()       { return { enabled: scanEnabled, intervalMs: scanIntervalMs }; }
+
 /**
- * Bắt đầu auto-scanner theo lịch
- * @param {function} onSignal - Callback khi có tín hiệu: onSignal(result)
- * @param {function} [getWatchlist] - Hàm lấy watchlist động (watchlist có thể thay đổi theo lệnh bot)
- * @returns {NodeJS.Timeout} - Interval ID để dừng nếu cần
+ * Bắt đầu auto-scanner theo lịch động
+ * @param {function} onSignal    - Callback khi có tín hiệu: onSignal(result)
+ * @param {function} getWatchlist - Hàm lấy watchlist động
  */
 export function startAutoScanner(onSignal, getWatchlist = null) {
-  const intervalMs = config.scanner.intervalMs;
-  const minScore   = config.signals.minScore;
+  const minScore = config.signals.minScore;
 
   async function runScan() {
-    const symbols = getWatchlist ? getWatchlist() : defaultWatchlist;
-
-    if (!isMarketOpen()) {
+    if (!scanEnabled) {
+      console.log(`[Scanner] ⏸️  Auto-scan đang TẮT — bỏ qua lần này`);
+    } else if (!isMarketOpen()) {
       console.log(`[Scanner] ⏸️  Ngoài giờ giao dịch (${new Date().toLocaleTimeString('vi-VN')}) — bỏ qua`);
-      return;
-    }
+    } else {
+      const symbols = getWatchlist ? getWatchlist() : defaultWatchlist;
+      console.log(`\n[Scanner] 🔍 Bắt đầu scan ${symbols.length} mã lúc ${new Date().toLocaleTimeString('vi-VN')}`);
 
-    console.log(`\n[Scanner] 🔍 Bắt đầu scan ${symbols.length} mã lúc ${new Date().toLocaleTimeString('vi-VN')}`);
+      const results = await scanAll(symbols);
 
-    const results = await scanAll(symbols);
-
-    let alertCount = 0;
-    for (const result of results) {
-      if (result.error) {
-        console.log(`[Scanner] ⚠️  ${result.symbol}: ${result.error}`);
-        continue;
+      let alertCount = 0;
+      for (const result of results) {
+        if (result.error) {
+          console.log(`[Scanner] ⚠️  ${result.symbol}: ${result.error}`);
+          continue;
+        }
+        if (result.signal !== 'NEUTRAL' && result.score >= minScore) {
+          console.log(`[Scanner] 📢 ${result.symbol}: ${result.signal} (score=${result.score})`);
+          onSignal(result);
+          alertCount++;
+        } else {
+          console.log(`[Scanner] ⬜ ${result.symbol}: ${result.signal} (score=${result.score ?? 0})`);
+        }
       }
 
-      if (result.signal !== 'NEUTRAL' && result.score >= minScore) {
-        console.log(`[Scanner] 📢 ${result.symbol}: ${result.signal} (score=${result.score})`);
-        onSignal(result);
-        alertCount++;
-      } else {
-        console.log(`[Scanner] ⬜ ${result.symbol}: ${result.signal} (score=${result.score ?? 0})`);
-      }
+      console.log(`[Scanner] ✅ Xong. ${alertCount} tín hiệu được gửi. Scan tiếp sau ${scanIntervalMs / 60000} phút.\n`);
     }
 
-    console.log(`[Scanner] ✅ Xong. ${alertCount} tín hiệu được gửi. Scan tiếp sau ${intervalMs / 60000} phút.\n`);
+    // Lên lịch lần tiếp với interval hiện tại (có thể đã thay đổi)
+    setTimeout(runScan, scanIntervalMs);
   }
 
-  // Chạy lần đầu ngay lập tức
-  runScan();
-
-  // Lặp lại theo interval
-  return setInterval(runScan, intervalMs);
+  // Lên lịch lần đầu sau 1 interval
+  setTimeout(runScan, scanIntervalMs);
 }
